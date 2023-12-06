@@ -55,6 +55,10 @@ float Gui_GetChatScale(void) {
 	return Gui_Scale(GetWindowScale() * Gui.RawChatScale);
 }
 
+float Gui_GetCrosshairScale(void) {
+	return Gui_Scale(Gui.RawCrosshairScale);
+}
+
 void Gui_MakeTitleFont(struct FontDesc* font) { Font_Make(font, 16, FONT_FLAGS_BOLD); }
 void Gui_MakeBodyFont(struct FontDesc* font)  { Font_Make(font, 16, FONT_FLAGS_NONE); }
 
@@ -106,6 +110,7 @@ static void LoadOptions(void) {
 	Gui.RawInventoryScale = Options_GetFloat(OPT_INVENTORY_SCALE, 0.25f, 5.0f, 1.0f);
 	Gui.RawHotbarScale    = Options_GetFloat(OPT_HOTBAR_SCALE,    0.25f, 5.0f, 1.0f);
 	Gui.RawChatScale      = Options_GetFloat(OPT_CHAT_SCALE,      0.25f, 5.0f, 1.0f);
+	Gui.RawCrosshairScale = Options_GetFloat(OPT_CROSSHAIR_SCALE, 0.25f, 5.0f, 1.0f);
 	Gui.RawTouchScale     = Options_GetFloat(OPT_TOUCH_SCALE,     0.25f, 5.0f, 1.0f);
 }
 
@@ -435,8 +440,7 @@ void Screen_Render2Widgets(void* screen, double delta) {
 
 void Screen_UpdateVb(void* screen) {
 	struct Screen* s = (struct Screen*)screen;
-	Gfx_DeleteDynamicVb(&s->vb);
-	s->vb = Gfx_CreateDynamicVb(VERTEX_FORMAT_TEXTURED, s->maxVertices);
+	Gfx_RecreateDynamicVb(&s->vb, VERTEX_FORMAT_TEXTURED, s->maxVertices);
 }
 
 struct VertexTextured* Screen_LockVb(void* screen) {

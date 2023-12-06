@@ -187,8 +187,6 @@ static void Menu_Remove(void* screen, int i) {
 static void Menu_BeginGen(int width, int height, int length) {
 	World_NewMap();
 	World_SetDimensions(width, height, length);
-
-	Gen_Start();
 	GeneratingScreen_Show();
 }
 
@@ -1063,10 +1061,10 @@ static struct GenLevelScreen {
 	Screen_Body
 	struct FontDesc textFont;
 	struct ButtonWidget flatgrass, vanilla, cancel;
+	struct TextInputWidget* selected;
 	struct TextInputWidget inputs[4];
 	struct TextWidget labels[4], title;
 } GenLevelScreen;
-#define GENLEVEL_NUM_INPUTS 4
 
 static struct Widget* gen_widgets[12] = {
 	(struct Widget*)&GenLevelScreen.inputs[0], (struct Widget*)&GenLevelScreen.inputs[1],
@@ -1100,7 +1098,7 @@ CC_NOINLINE static int GenLevelScreen_GetSeedInt(struct GenLevelScreen* s, int i
 	return GenLevelScreen_GetInt(s, index);
 }
 
-static void GenLevelScreen_Gen(void* screen, const struct MapGenerator* gen) {
+static void GenLevelScreen_Gen(void* screen, cc_bool vanilla) {
 	struct GenLevelScreen* s = (struct GenLevelScreen*)screen;
 	int width  = GenLevelScreen_GetInt(s, 0);
 	int height = GenLevelScreen_GetInt(s, 1);
@@ -1113,15 +1111,14 @@ static void GenLevelScreen_Gen(void* screen, const struct MapGenerator* gen) {
 	} else if (!width || !height || !length) {
 		Chat_AddRaw("&cOne of the map dimensions is invalid.");
 	} else {
-		Gen_Active  = gen;
-		Gen_Seed    = seed;
+		Gen_Vanilla = vanilla; Gen_Seed = seed;
 		Gui_Remove((struct Screen*)s);
 		Menu_BeginGen(width, height, length);
 	}
 }
 
-static void GenLevelScreen_Flatgrass(void* a, void* b) { GenLevelScreen_Gen(a, &FlatgrassGen); }
-static void GenLevelScreen_Notchy(void* a, void* b)    { GenLevelScreen_Gen(a, &NotchyGen);    }
+static void GenLevelScreen_Flatgrass(void* a, void* b) { GenLevelScreen_Gen(a, false); }
+static void GenLevelScreen_Notchy(void* a, void* b)    { GenLevelScreen_Gen(a, true);  }
 
 static void GenLevelScreen_Make(struct GenLevelScreen* s, int i, int def) {
 	cc_string tmp; char tmpBuffer[STRING_SIZE];
@@ -1139,54 +1136,37 @@ static void GenLevelScreen_Make(struct GenLevelScreen* s, int i, int def) {
 	TextInputWidget_Create(&s->inputs[i], 200, &tmp, &desc);
 	s->inputs[i].base.showCaret = false;
 	TextWidget_Init(&s->labels[i]);
-	s->labels[i].color = PackedCol_Make(224, 224, 224, 255);
+	s->labels[i].col = PackedCol_Make(224, 224, 224, 255);
 	/* TODO placeholder */
 	s->inputs[i].onscreenType = KEYBOARD_TYPE_INTEGER;
 }
 
-static struct TextInputWidget* GenLevelScreen_SelectedInput(struct GenLevelScreen* s) {
-	if (s->selectedI >= 0 && s->selectedI < GENLEVEL_NUM_INPUTS)
-		return &s->inputs[s->selectedI];
-	return NULL;
-}
-
 static int GenLevelScreen_KeyDown(void* screen, int key) {
 	struct GenLevelScreen* s = (struct GenLevelScreen*)screen;
-	struct TextInputWidget* selected = GenLevelScreen_SelectedInput(s);
-	struct MenuInputDesc* desc;
-
-	if (selected) {
-		if (Elem_HandlesKeyDown(&selected->base, key)) return true;
-
-		desc = &selected->desc;
-		if (desc->VTABLE->ProcessInput(desc, &selected->base.text, key)) return true;
-	}
-	return Menu_InputDown(s, key);
+	if (s->selected && Elem_HandlesKeyDown(&s->selected->base, key)) return true;
+	return Screen_InputDown(s, key);
 }
 
 static int GenLevelScreen_KeyPress(void* screen, char keyChar) {
 	struct GenLevelScreen* s = (struct GenLevelScreen*)screen;
-	struct TextInputWidget* selected = GenLevelScreen_SelectedInput(s);
-
-	if (selected) InputWidget_Append(&selected->base, keyChar);
+	if (s->selected) InputWidget_Append(&s->selected->base, keyChar);
 	return true;
 }
 
 static int GenLevelScreen_TextChanged(void* screen, const cc_string* str) {
 	struct GenLevelScreen* s = (struct GenLevelScreen*)screen;
-	struct TextInputWidget* selected = GenLevelScreen_SelectedInput(s);
-
-	if (selected) InputWidget_SetText(&selected->base, str);
+	if (s->selected) InputWidget_SetText(&s->selected->base, str);
 	return true;
 }
 
 static int GenLevelScreen_PointerDown(void* screen, int id, int x, int y) {
 	struct GenLevelScreen* s = (struct GenLevelScreen*)screen;
-	struct TextInputWidget* selected;
-	s->selectedI = Screen_DoPointerDown(screen, id, x, y);
+	int i = Screen_DoPointerDown(screen, id, x, y);
+	if (i == -1 || i >= 4) return TOUCH_TYPE_GUI;
 
-	selected = GenLevelScreen_SelectedInput(s);
-	if (selected) Window_SetKeyboardText(&selected->base.text);
+	if (s->selected) s->selected->base.showCaret = false;
+	s->selected = (struct TextInputWidget*)&s->inputs[i];
+	Window_SetKeyboardText(&s->inputs[i].base.text);
 	return TOUCH_TYPE_GUI;
 }
 
@@ -1222,14 +1202,7 @@ static void GenLevelScreen_ContextRecreated(void* screen) {
 
 static void GenLevelScreen_Update(void* screen, double delta) {
 	struct GenLevelScreen* s = (struct GenLevelScreen*)screen;
-	struct TextInputWidget* selected = GenLevelScreen_SelectedInput(s);
-	int i;
-	for (i = 0; i < GENLEVEL_NUM_INPUTS; i++)
-	{
-		s->inputs[i].base.showCaret = i == s->selectedI;
-	}
-
-	if (selected) selected->base.caretAccumulator += delta;
+	if (s->selected) s->selected->base.caretAccumulator += delta;
 }
 
 static void GenLevelScreen_Layout(void* screen) {
@@ -1251,7 +1224,7 @@ static void GenLevelScreen_Init(void* screen) {
 	struct GenLevelScreen* s = (struct GenLevelScreen*)screen;
 	s->widgets     = gen_widgets;
 	s->numWidgets  = Array_Elems(gen_widgets);
-	s->selectedI   = -1;
+	s->selected    = NULL;
 	s->maxVertices = GEN_MAX_VERTICES;
 
 	GenLevelScreen_Make(s, 0, World.Width);
@@ -1299,8 +1272,8 @@ static struct Widget* classicgen_widgets[] = {
 
 static void ClassicGenScreen_Gen(int size) {
 	RNGState rnd; Random_SeedFromCurrentTime(&rnd);
-	Gen_Active = &NotchyGen;
-	Gen_Seed   = Random_Next(&rnd, Int32_MaxValue);
+	Gen_Vanilla = true;
+	Gen_Seed    = Random_Next(&rnd, Int32_MaxValue);
 
 	Gui_Remove((struct Screen*)&ClassicGenScreen);
 	Menu_BeginGen(size, 64, size);
@@ -3053,6 +3026,9 @@ static void GuiOptionsScreen_SetHotbar(const cc_string* v) { ChatOptionsScreen_S
 static void GuiOptionsScreen_GetInventory(cc_string* v) { String_AppendFloat(v, Gui.RawInventoryScale, 1); }
 static void GuiOptionsScreen_SetInventory(const cc_string* v) { ChatOptionsScreen_SetScale(v, &Gui.RawInventoryScale, OPT_INVENTORY_SCALE); }
 
+static void GuiOptionsScreen_GetCrosshair(cc_string* v) { String_AppendFloat(v, Gui.RawCrosshairScale, 1); }
+static void GuiOptionsScreen_SetCrosshair(const cc_string* v) { ChatOptionsScreen_SetScale(v, &Gui.RawCrosshairScale, OPT_CROSSHAIR_SCALE); }
+
 static void GuiOptionsScreen_GetTabAuto(cc_string* v) { Menu_GetBool(v, Gui.TabAutocomplete); }
 static void GuiOptionsScreen_SetTabAuto(const cc_string* v) { Gui.TabAutocomplete = Menu_SetBool(v, OPT_TAB_AUTOCOMPLETE); }
 
@@ -3072,7 +3048,8 @@ static void GuiOptionsScreen_InitWidgets(struct MenuOptionsScreen* s) {
 			GuiOptionsScreen_GetHotbar,    GuiOptionsScreen_SetHotbar },
 		{ -1,   50, "Inventory scale",    MenuOptionsScreen_Input,
 			GuiOptionsScreen_GetInventory, GuiOptionsScreen_SetInventory },
-
+		{ 1,  -100, "Crosshair scale",  MenuOptionsScreen_Input,
+			GuiOptionsScreen_GetCrosshair, GuiOptionsScreen_SetCrosshair },
 		{ 1,  -50, "Tab auto-complete",  MenuOptionsScreen_Bool,
 			GuiOptionsScreen_GetTabAuto,   GuiOptionsScreen_SetTabAuto },
 		{ 1,    0, "Use system font",    MenuOptionsScreen_Bool,
@@ -3081,8 +3058,8 @@ static void GuiOptionsScreen_InitWidgets(struct MenuOptionsScreen* s) {
 			NULL,                          NULL }
 	};
 
-	s->numCore      = 7;
-	s->maxVertices += 7 * BUTTONWIDGET_MAX;
+	s->numCore      = 8;
+	s->maxVertices += 8 * BUTTONWIDGET_MAX;
 	MenuOptionsScreen_InitButtons(s, buttons, Array_Elems(buttons), Menu_SwitchOptions);
 }
 
@@ -3090,6 +3067,7 @@ void GuiOptionsScreen_Show(void) {
 	static struct MenuInputDesc descs[8];
 	MenuInput_Float(descs[2], 0.25f, 4.00f, 1);
 	MenuInput_Float(descs[3], 0.25f, 4.00f, 1);
+	MenuInput_Float(descs[4], 0.25f, 4.00f, 1);
 	MenuOptionsScreen_Show(descs, GuiOptionsScreen_InitWidgets);
 }
 
@@ -3509,7 +3487,7 @@ static void Overlay_InitLabels(struct TextWidget* labels) {
 	TextWidget_Init(&labels[0]);
 	for (i = 1; i < 4; i++) {
 		TextWidget_Init(&labels[i]);
-		labels[i].color = PackedCol_Make(224, 224, 224, 255);
+		labels[i].col = PackedCol_Make(224, 224, 224, 255);
 	}
 }
 
@@ -4020,9 +3998,8 @@ static void TouchOnscreen_UpdateColors(struct TouchOnscreenScreen* s) {
 	PackedCol grey = PackedCol_Make(0x7F, 0x7F, 0x7F, 0xFF);
 	int i, j;
 
-	for (i = 0, j = s->offset; i < ONSCREEN_PAGE_BTNS; i++, j++) 
-	{
-		s->btns[i].color = (Gui._onscreenButtons & (1 << j)) ? PACKEDCOL_WHITE : grey;
+	for (i = 0, j = s->offset; i < ONSCREEN_PAGE_BTNS; i++, j++) {
+		s->btns[i].col = (Gui._onscreenButtons & (1 << j)) ? PACKEDCOL_WHITE : grey;
 	}
 }
 

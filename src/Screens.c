@@ -120,7 +120,7 @@ static void HUDScreen_BuildPosition(struct HUDScreen* s, struct VertexTextured* 
 
 	/* Make "Position: " prefix */
 	tex = atlas->tex; 
-	tex.X     = 2 + DisplayInfo.ContentOffsetX;
+	tex.X     = 2 + DisplayInfo.ContentOffset;
 	tex.Width = atlas->offset;
 	Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, &cur);
 
@@ -214,11 +214,11 @@ static void HUDScreen_Layout(void* screen) {
 	int posY;
 
 	Widget_SetLocation(line1, ANCHOR_MIN, ANCHOR_MIN, 
-						2 + DisplayInfo.ContentOffsetX, 2 + DisplayInfo.ContentOffsetY);
+						2 + DisplayInfo.ContentOffset, 2 + DisplayInfo.ContentOffset);
 	posY = line1->y + line1->height;
 	s->posAtlas.tex.Y = posY;
 	Widget_SetLocation(line2, ANCHOR_MIN, ANCHOR_MIN, 
-						2 + DisplayInfo.ContentOffsetX, 0);
+						2 + DisplayInfo.ContentOffset, 0);
 
 	if (Game_ClassicMode) {
 		/* Swap around so 0.30 version is at top */
@@ -335,8 +335,8 @@ static void HUDScreen_Update(void* screen, double delta) {
 static void HUDScreen_BuildCrosshairsMesh(struct VertexTextured** ptr) {
 	static struct Texture tex = { 0, Tex_Rect(0,0,0,0), Tex_UV(0.0f,0.0f, 15/256.0f,15/256.0f) };
 	int extent;
-
-	extent = (int)(CH_EXTENT * Gui_Scale(WindowInfo.Height / 480.0f));
+	
+	extent = (int)(CH_EXTENT * Gui_Scale(WindowInfo.Height / 480.0f) * Gui_GetCrosshairScale());
 	tex.ID = Gui.IconsTex;
 	tex.X  = (WindowInfo.Width  / 2) - extent;
 	tex.Y  = (WindowInfo.Height / 2) - extent;
@@ -1903,7 +1903,23 @@ static void GeneratingScreen_AtlasChanged(void* obj) {
 }
 
 static void GeneratingScreen_Init(void* screen) {
+	void* thread;
+	Gen_Done = false;
 	LoadingScreen_Init(screen);
+
+	Gen_Blocks = (BlockRaw*)Mem_TryAlloc(World.Volume, 1);
+	if (!Gen_Blocks) {
+		Window_ShowDialog("Out of memory", "Not enough free memory to generate a map that large.\nTry a smaller size.");
+		Gen_Done = true;
+	} else if (Gen_Vanilla) {
+		thread = Thread_Create(NotchyGen_Generate);
+		Thread_Start2(thread,  NotchyGen_Generate);
+		Thread_Detach(thread);
+	} else {
+		thread = Thread_Create(FlatgrassGen_Generate);
+		Thread_Start2(thread,  FlatgrassGen_Generate);
+		Thread_Detach(thread);
+	}
 	Event_Register_(&TextureEvents.AtlasChanged,   NULL, GeneratingScreen_AtlasChanged);
 }
 static void GeneratingScreen_Free(void* screen) {
@@ -1912,6 +1928,7 @@ static void GeneratingScreen_Free(void* screen) {
 }
 
 static void GeneratingScreen_EndGeneration(void) {
+	Gen_Done   = false;
 	World_SetNewMap(Gen_Blocks, World.Width, World.Height, World.Length);
 	if (!Gen_Blocks) { Chat_AddRaw("&cFailed to generate the map."); return; }
 
@@ -1937,7 +1954,7 @@ static void GeneratingScreen_Render(void* screen, double delta) {
 	struct LoadingScreen* s = (struct LoadingScreen*)screen;
 	s->progress = Gen_CurrentProgress;
 	LoadingScreen_Render(s, delta);
-	if (Gen_IsDone()) GeneratingScreen_EndGeneration();
+	if (Gen_Done) GeneratingScreen_EndGeneration();
 }
 
 static const struct ScreenVTABLE GeneratingScreen_VTABLE = {
@@ -2241,7 +2258,7 @@ static void TouchScreen_InitButtons(struct TouchScreen* s) {
 	for (i = 0; i < s->numBtns; i++) {
 		s->widgets[i + ONSCREEN_MAX_BTNS] = (struct Widget*)&s->btns[i];
 		ButtonWidget_Init(&s->btns[i], 60, s->descs[i].OnClick);
-		s->btns[i].color = TOUCHSCREEN_BTN_COL;
+		s->btns[i].col = TOUCHSCREEN_BTN_COL;
 	}
 }
 
@@ -2376,7 +2393,7 @@ static void TouchScreen_Init(void* screen) {
 
 	TouchScreen_InitButtons(s);
 	ButtonWidget_Init(&s->more, 40, TouchScreen_MoreClick);
-	s->more.color = TOUCHSCREEN_BTN_COL;
+	s->more.col = TOUCHSCREEN_BTN_COL;
 
 	ThumbstickWidget_Init(&s->thumbstick);
 	touchInput.GetMovement = TouchScreen_GetMovement;
